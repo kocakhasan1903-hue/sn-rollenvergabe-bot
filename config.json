@@ -1,0 +1,13 @@
+{
+  "verify_channel_id": "1467305637775151126",
+  "log_channel_id": "1467494356209369099",
+  "auto_role_name": "Einreise",
+  "embed_title": "Rollenvergabe - LSD Sin Nombre",
+  "embed_text": "Klicke auf **Rollenvergabe starten**, wähle deine Familie und gib deine IC-Daten ein.",
+  "staff_role_ids": [
+    "1467305636965384410",
+    "1467305636965384409",
+    "1467305636965384407",
+    "1467305636965384407"
+  ]
+}
