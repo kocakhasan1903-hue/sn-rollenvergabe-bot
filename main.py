@@ -89,9 +89,14 @@ class VerifyModal(discord.ui.Modal, title="🧬 Rollenvergabe"):
             await interaction.response.send_message("❌ Passwort falsch.", ephemeral=True)
             return
 
-        role = interaction.guild.get_role(int(data["role_id"]))
+        role_id = str(data.get("role_id", "")).strip()
+        if not role_id.isdigit():
+            await interaction.response.send_message("❌ Rolle-ID ungültig (Staff muss Familie neu setzen).", ephemeral=True)
+            return
+
+        role = interaction.guild.get_role(int(role_id))
         if not role:
-            await interaction.response.send_message("❌ Die Rollen-ID ist ungültig / Rolle gelöscht.", ephemeral=True)
+            await interaction.response.send_message("❌ Rolle existiert nicht (mehr). Staff muss Familie neu setzen.", ephemeral=True)
             return
 
         member = interaction.user
@@ -115,7 +120,7 @@ class VerifyModal(discord.ui.Modal, title="🧬 Rollenvergabe"):
             await member.add_roles(role)
         except:
             await interaction.response.send_message(
-                "❌ Rolle konnte nicht vergeben werden. Prüfe Rollen-Hierarchie & 'Manage Roles'.",
+                "❌ Rolle konnte nicht vergeben werden. Prüfe Rollen-Hierarchie & 'Rollen verwalten'.",
                 ephemeral=True
             )
             return
@@ -160,6 +165,15 @@ class StartView(discord.ui.View):
             return
         await interaction.response.send_message("👇 Familie auswählen:", ephemeral=True, view=FamilyView())
 
+# ---------- Auto UI posting (edit instead of spam) ----------
+async def ensure_ui_message(channel: discord.TextChannel) -> discord.Message:
+    async for msg in channel.history(limit=30):
+        if msg.author.id == bot.user.id and msg.embeds:
+            if msg.embeds[0].title and EMBED_TITLE.lower() in msg.embeds[0].title.lower():
+                await msg.edit(embed=build_embed(), view=StartView())
+                return msg
+    return await channel.send(embed=build_embed(), view=StartView())
+
 # ---------- Staff Commands ----------
 @bot.tree.command(name="familie_add", description="Familie anlegen (Staff)")
 async def familie_add(interaction: discord.Interaction, name: str, passwort: str, rolle: discord.Role):
@@ -168,10 +182,63 @@ async def familie_add(interaction: discord.Interaction, name: str, passwort: str
         return
 
     fams = load_families()
-    fams[name.strip()] = {"password": passwort.strip(), "role_id": str(rolle.id)}
+    name = name.strip()
+
+    fams[name] = {"password": passwort.strip(), "role_id": str(rolle.id)}
     save_families(fams)
 
+    await log(interaction.guild, f"🛠️ familie_add: {interaction.user} → {name} = {rolle.name}")
     await interaction.response.send_message(f"✅ Familie **{name}** gespeichert → {rolle.mention}", ephemeral=True)
+
+@bot.tree.command(name="familie_remove", description="Familie entfernen (Staff)")
+async def familie_remove(interaction: discord.Interaction, name: str):
+    if not is_staff(interaction.user):
+        await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
+        return
+
+    fams = load_families()
+    name = name.strip()
+
+    if name not in fams:
+        await interaction.response.send_message("❌ Familie nicht gefunden.", ephemeral=True)
+        return
+
+    del fams[name]
+    save_families(fams)
+
+    await log(interaction.guild, f"🗑️ familie_remove: {interaction.user} → {name}")
+    await interaction.response.send_message(f"✅ Familie **{name}** wurde entfernt.", ephemeral=True)
+
+@bot.tree.command(name="familie_edit", description="Familie bearbeiten (Passwort/Rolle) (Staff)")
+@app_commands.describe(name="Familienname", passwort="Neues Passwort (optional)", rolle="Neue Rolle (optional)")
+async def familie_edit(interaction: discord.Interaction, name: str, passwort: str = None, rolle: discord.Role = None):
+    if not is_staff(interaction.user):
+        await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
+        return
+
+    fams = load_families()
+    name = name.strip()
+
+    if name not in fams:
+        await interaction.response.send_message("❌ Familie nicht gefunden.", ephemeral=True)
+        return
+
+    changed = []
+    if passwort is not None and passwort.strip():
+        fams[name]["password"] = passwort.strip()
+        changed.append("Passwort")
+
+    if rolle is not None:
+        fams[name]["role_id"] = str(rolle.id)
+        changed.append(f"Rolle → {rolle.name}")
+
+    if not changed:
+        await interaction.response.send_message("⚠️ Nichts geändert. Gib passwort und/oder rolle an.", ephemeral=True)
+        return
+
+    save_families(fams)
+    await log(interaction.guild, f"✏️ familie_edit: {interaction.user} → {name} | {', '.join(changed)}")
+    await interaction.response.send_message(f"✅ Familie **{name}** aktualisiert: {', '.join(changed)}", ephemeral=True)
 
 @bot.tree.command(name="familien_liste", description="Familien anzeigen (Staff)")
 async def familien_liste(interaction: discord.Interaction):
@@ -195,24 +262,11 @@ async def ui_update(interaction: discord.Interaction):
 
     ch = interaction.guild.get_channel(VERIFY_CHANNEL_ID)
     if not ch:
-        await interaction.response.send_message("❌ Verify-Channel ID falsch.", ephemeral=True)
+        await interaction.response.send_message("❌ Verify-Channel ID falsch oder Bot sieht den Channel nicht.", ephemeral=True)
         return
 
     msg = await ensure_ui_message(ch)
     await interaction.response.send_message(f"✅ UI aktualisiert: {msg.jump_url}", ephemeral=True)
-
-# ---------- Auto UI posting (edit instead of spam) ----------
-async def ensure_ui_message(channel: discord.TextChannel) -> discord.Message:
-    # Find last bot message with our embed title, else create new
-    async for msg in channel.history(limit=30):
-        if msg.author.id == bot.user.id and msg.embeds:
-            if msg.embeds[0].title and EMBED_TITLE.lower() in msg.embeds[0].title.lower():
-                # Update existing
-                await msg.edit(embed=build_embed(), view=StartView())
-                return msg
-
-    # Not found -> send new
-    return await channel.send(embed=build_embed(), view=StartView())
 
 # ---------- Events ----------
 @bot.event
@@ -226,8 +280,7 @@ async def setup_hook():
 async def on_ready():
     print(f"✅ Online als {bot.user}")
 
-    # Auto-post UI in every guild where bot is present (but needs correct channel id per guild)
-    # In deinem echten Server passt VERIFY_CHANNEL_ID. In anderen Servern einfach /ui_update benutzen.
+    # Auto UI update in the configured verify channel (on this server)
     for g in bot.guilds:
         ch = g.get_channel(VERIFY_CHANNEL_ID)
         if ch:
